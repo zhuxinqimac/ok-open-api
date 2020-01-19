@@ -1,0 +1,1 @@
+2020-01-17T02:51:53.901Z{"event":"error","message":"Channel spot/candle90s:ETH-BTC doesn't exist","errorCode":30040}

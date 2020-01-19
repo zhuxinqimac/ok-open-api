@@ -1,0 +1,1 @@
+2020-01-17T03:01:03.009Z{"event":"error","message":"Channel spot/depth10:ETH-BTC doesn't exist","errorCode":30040}

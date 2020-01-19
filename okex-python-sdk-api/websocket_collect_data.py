@@ -1,3 +1,5 @@
+import os
+import argparse
 import asyncio
 import websockets
 import json
@@ -62,20 +64,24 @@ def inflate(data):
     return inflated
 
 
-def partial(res, timestamp):
+def partial(res, timestamp, filename, args):
     data_obj = res['data'][0]
     bids = data_obj['bids']
     asks = data_obj['asks']
-    print(timestamp + '全量数据bids为：' + str(bids))
-    logging.info('partial bids:' + str(bids))
-    print('档数为：' + str(len(bids)))
-    print(timestamp + '全量数据asks为：' + str(asks))
-    logging.info('partial asks:' + str(asks))
-    print('档数为：' + str(len(asks)))
+    with open(filename, 'a') as f:
+        f.write(timestamp + 'bids:' + str(bids[:args.keep_depth_size]) + '\n')
+        f.write('n_bids:' + str(len(bids[:args.keep_depth_size])) + '\n')
+    print(timestamp + '全量数据bids为：' + str(bids[:args.keep_depth_size]))
+    print('档数为：' + str(len(bids[:args.keep_depth_size])))
+    with open(filename, 'a') as f:
+        f.write(timestamp + 'asks:' + str(asks[:args.keep_depth_size]) + '\n')
+        f.write('n_asks:' + str(len(asks[:args.keep_depth_size])) + '\n')
+    print(timestamp + '全量数据asks为：' + str(asks[:args.keep_depth_size]))
+    print('档数为：' + str(len(asks[:args.keep_depth_size])))
     return bids, asks
 
 
-def update_bids(res, bids_p, timestamp):
+def update_bids(res, bids_p, timestamp, filename, args):
     # 获取增量bids数据
     bids_u = res['data'][0]['bids']
     print(timestamp + '增量数据bids为：' + str(bids_u))
@@ -97,12 +103,16 @@ def update_bids(res, bids_p, timestamp):
                 bids_p.append(i)
     else:
         bids_p.sort(key=lambda price: sort_num(price[0]), reverse=True)
-        print(timestamp + '合并后的bids为：' + str(bids_p) + '，档数为：' + str(len(bids_p)))
-        logging.info('combine bids:' + str(bids_p))
+        with open(filename, 'a') as f:
+            f.write(timestamp + 'bids:' + str(bids_p[:args.keep_depth_size]) + '\n')
+            f.write('n_bids:' + str(len(bids_p[:args.keep_depth_size])) + '\n')
+        print(timestamp + '合并后的bids为：' + str(bids_p[:args.keep_depth_size]) + 
+                '，档数为：' + str(len(bids_p[:args.keep_depth_size])))
+        # logging.info('combine bids:' + str(bids_p))
     return bids_p
 
 
-def update_asks(res, asks_p, timestamp):
+def update_asks(res, asks_p, timestamp, filename, args):
     # 获取增量asks数据
     asks_u = res['data'][0]['asks']
     print(timestamp + '增量数据asks为：' + str(asks_u))
@@ -124,8 +134,12 @@ def update_asks(res, asks_p, timestamp):
                 asks_p.append(i)
     else:
         asks_p.sort(key=lambda price: sort_num(price[0]))
-        print(timestamp + '合并后的asks为：' + str(asks_p) + '，档数为：' + str(len(asks_p)))
-        logging.info('combine asks:' + str(asks_p))
+        with open(filename, 'a') as f:
+            f.write(timestamp + 'asks:' + str(asks_p[:args.keep_depth_size]) + '\n')
+            f.write('n_asks:' + str(len(asks_p[:args.keep_depth_size])) + '\n')
+        print(timestamp + '合并后的asks为：' + str(asks_p[:args.keep_depth_size]) + 
+                '，档数为：' + str(len(asks_p[:args.keep_depth_size])))
+        # logging.info('combine asks:' + str(asks_p))
     return asks_p
 
 
@@ -174,14 +188,14 @@ def change(num_old):
 
 
 # subscribe channels un_need login
-async def subscribe_without_login(url, channels):
+async def subscribe_without_login(args, url, channels, filename):
     while True:
         try:
             async with websockets.connect(url) as ws:
                 sub_param = {"op": "subscribe", "args": channels}
                 sub_str = json.dumps(sub_param)
                 await ws.send(sub_str)
-                logging.info(f"send: {sub_str}")
+                # logging.info(f"send: {sub_str}")
 
                 while True:
                     try:
@@ -193,17 +207,22 @@ async def subscribe_without_login(url, channels):
                             res_b = await ws.recv()
                             res = inflate(res_b).decode('utf-8')
                             print(res)
-                            logging.info(res)
+                            # logging.info(res)
                             continue
                         except Exception as e:
                             print("连接关闭，正在重连……")
-                            logging.error(e)
+                            # logging.error(e)
                             break
-                    await asyncio.sleep(2)
+                    if args.type.startswith('candle'):
+                        await asyncio.sleep(int(args.type[6:-1]) // 10)
+                    else:
+                        await asyncio.sleep(2)
 
                     res = inflate(res_b).decode('utf-8')
-                    logging.info(f"recv: {res}")
+                    # logging.info(f"recv: {res}")
                     timestamp = get_timestamp()
+                    with open(filename, 'a') as f:
+                        f.write(timestamp + res + '\n')
                     print(timestamp + res)
                     res = eval(res)
                     if 'event' in res:
@@ -214,21 +233,25 @@ async def subscribe_without_login(url, channels):
                             # 订阅频道是深度频道
                             if res['action'] == 'partial':
                                 # 获取首次全量深度数据
-                                bids_p, asks_p = partial(res, timestamp)
+                                bids_p, asks_p = partial(res, timestamp, filename, args)
 
                                 # 校验checksum
                                 checksum = res['data'][0]['checksum']
                                 print(timestamp + '推送数据的checksum为：' + str(checksum))
-                                logging.info('get checksum:' + str(checksum))
+                                # logging.info('get checksum:' + str(checksum))
                                 check_num = check(bids_p, asks_p)
                                 print(timestamp + '校验后的checksum为：' + str(check_num))
-                                logging.info('calculate checksum:' + str(check_num))
+                                # logging.info('calculate checksum:' + str(check_num))
                                 if check_num == checksum:
+                                    with open(filename, 'a') as f:
+                                        f.write('checksum: True\n')
                                     print("校验结果为：True")
-                                    logging.info('checksum: True')
+                                    # logging.info('checksum: True')
                                 else:
+                                    with open(filename, 'a') as f:
+                                        f.write('checksum: False\n')
                                     print(timestamp + "校验结果为：False，正在重新订阅……")
-                                    logging.error('checksum: False')
+                                    # logging.error('checksum: False')
 
                                     # 取消订阅
                                     await unsubscribe_without_login(url, channels, timestamp)
@@ -238,26 +261,26 @@ async def subscribe_without_login(url, channels):
                                         sub_str = json.dumps(sub_param)
                                         await ws.send(sub_str)
                                         print(timestamp + f"send: {sub_str}")
-                                        logging.info(f"send: {sub_str}")
+                                        # logging.info(f"send: {sub_str}")
 
                             elif res['action'] == 'update':
                                 # 获取合并后数据
-                                bids_p = update_bids(res, bids_p, timestamp)
-                                asks_p = update_asks(res, asks_p, timestamp)
+                                bids_p = update_bids(res, bids_p, timestamp, filename, args)
+                                asks_p = update_asks(res, asks_p, timestamp, filename, args)
 
                                 # 校验checksum
                                 checksum = res['data'][0]['checksum']
                                 print(timestamp + '推送数据的checksum为：' + str(checksum))
-                                logging.info('get checksum:' + str(checksum))
+                                # logging.info('get checksum:' + str(checksum))
                                 check_num = check(bids_p, asks_p)
                                 print(timestamp + '校验后的checksum为：' + str(check_num))
-                                logging.info('calculate checksum:' + str(check_num))
+                                # logging.info('calculate checksum:' + str(check_num))
                                 if check_num == checksum:
                                     print("校验结果为：True")
-                                    logging.info('checksum: True')
+                                    # logging.info('checksum: True')
                                 else:
                                     print(timestamp + "校验结果为：False，正在重新订阅……")
-                                    logging.error('checksum: False')
+                                    # logging.error('checksum: False')
 
                                     # 取消订阅
                                     await unsubscribe_without_login(url, channels, timestamp)
@@ -267,9 +290,9 @@ async def subscribe_without_login(url, channels):
                                         sub_str = json.dumps(sub_param)
                                         await ws.send(sub_str)
                                         print(timestamp + f"send: {sub_str}")
-                                        logging.info(f"send: {sub_str}")
+                                        # logging.info(f"send: {sub_str}")
         except Exception as e:
-            logging.info(e)
+            # logging.info(e)
             print("连接断开，正在重连……")
             continue
 
@@ -378,120 +401,55 @@ async def unsubscribe_without_login(url, channels, timestamp):
         logging.info(f"recv: {res}")
 
 
-api_key = ""
-seceret_key = ""
-passphrase = ""
+if __name__ == '__main__':
+    api_key = ""
+    seceret_key = ""
+    passphrase = ""
 
-url = 'wss://real.okex.com:8443/ws/v3'
+    url = 'wss://real.okex.com:8443/ws/v3'
 
-# channels = []
-# 现货
-# 用户币币账户频道
-# channels = ["spot/account:XRP"]
-# 用户杠杆账户频道
-# channels = ["spot/margin_account:BTC-USDT"]
-# 用户交易频道
-# channels = ["spot/order:XRP-USDT"]
-# 公共-Ticker频道
-channels_0 = ["spot/ticker:ETH-BTC"]
-# 公共-K线频道
-channels_1 = ["spot/candle60s:ETH-BTC"]
-# 公共-交易频道
-# channels = ["spot/trade:ETH-BTC"]
-# 公共-5档深度频道
-# channels = [["spot/depth5:ETH-BTC"]]
-# 公共-200档深度频道
-# channels = ["spot/depth:ETH-BTC"]
+    parser = argparse.ArgumentParser(description='Websocket collect data.')
+    parser.add_argument('type', type=str, 
+            choices=['ticker', 'candle', 'trade', 'depth'],  
+            help='What data to collect.')
+    parser.add_argument('instrument_id', type=str, default='ETH-BTC', 
+            help='What currecy pair to collect.')
+    parser.add_argument('--results_dir', type=str, default='./spot_results', 
+            help='Results directory to save data.')
+    parser.add_argument('--candle_time', type=str, default='60s', 
+            # 60/180/300/900/1800/3600/7200/14400/21600/43200/86400/604800
+            help='Candle time.')
+    parser.add_argument('--keep_depth_size', type=int, default=50, 
+            help='Size kept of depth data.')
 
-# 交割合约
-# 用户持仓频道
-# channels = ["futures/position:EOS-USD-191227"]
-# 用户账户频道
-# channels = ["futures/account:BTC-USDT"]
-# 用户交易频道
-# channels = ["futures/order:TRX-USD-191213"]
-# 公共-全量合约信息频道
-# channels = ["futures/instruments"]
-# 公共-Ticker频道
-# channels = ["futures/ticker:ETC-USD-191227"]
-# 公共-K线频道
-# channels = ["futures/candle60s:EOS-USD-191227"]
-# 公共-交易频道
-# channels = ["futures/trade:BTC-USD-191227"]
-# 公共-预估交割价频道
-# channels = ["futures/estimated_price:BTC-USD-191227"]
-# 公共-限价频道
-# channels = ["futures/price_range:BTC-USD-191227"]
-# 公共-5档深度频道
-# channels = ["futures/depth5:BTC-USD-191129"]
-# 公共-400档深度频道
-# channels = ["futures/depth:LTC-USD-191213"]
-# 公共-全量深度频道
-# channels = ["futures/depth_l2_tbt:BTC-USD-191227"]
-# 公共-标记价格频道
-# channels = ["futures/mark_price:BTC-USD-191227"]
+    # channels = []
+    # 用户币币账户频道
+    # channels = ["spot/account:XRP"]
+    # 用户杠杆账户频道
+    # channels = ["spot/margin_account:BTC-USDT"]
+    # 用户交易频道
+    # channels = ["spot/order:XRP-USDT"]
+    # 公共-Ticker频道
+    args = parser.parse_args()
+    if args.type == 'candle':
+        args.type = args.type + args.candle_time
+    quest = 'spot/' + args.type + ':' + args.instrument_id
 
-# 永续合约
-# 用户持仓频道
-# channels = ["swap/position:BTC-USDT-SWAP"]
-# 用户账户频道
-# channels = ["swap/account:BTC-USD-SWAP"]
-# 用户交易频道
-# channels = ["swap/order:XRP-USD-SWAP"]
-# 用户委托策略频道
-# channels = ["swap/order_algo:LTC-USDT-SWAP"]
-# 公共-Ticker频道
-# channels = ["swap/ticker:BTC-USD-SWAP"]
-# 公共-K线频道
-# channels = ["swap/candle180s:BTC-USD-SWAP"]
-# 公共-交易频道
-# channels = ["swap/trade:BTC-USD-SWAP"]
-# 公共-资金费率频道
-# channels = ["swap/funding_rate:BTC-USD-SWAP"]
-# 公共-限价频道
-# channels = ["swap/price_range:BTC-USD-SWAP"]
-# 公共-5档深度频道
-# channels = ["swap/depth5:BTC-USD-SWAP"]
-# 公共-200档深度频道
-# channels = ["swap/depth:BTC-USD-SWAP"]
-# 公共-标记价格频道
-# channels = ["swap/mark_price:BTC-USD-SWAP"]
+    if not os.path.exists(args.results_dir):
+        os.makedirs(args.results_dir)
 
-# ws公共指数频道
-# 指数行情
-# channels = ["index/ticker:BTC-USD"]
-# 指数K线
-# channels = ["index/candle60s:BTC-USD"]
+    if args.type == 'depth':
+        args.type = args.type + str(args.keep_depth_size)
+    filename = args.type + '-' + args.instrument_id + '.txt'
+    filename = os.path.join(args.results_dir, filename)
 
-# 期权合约
-# 用户持仓频道
-# channels = ["option/position:BTC-USD"]
-# 用户账户频道
-# channels = ["option/account:BTC-USD"]
-# 用户交易频道
-# channels = ["option/order:BTC-USD"]
-# 公共-合约信息频道
-# channels = ["option/instruments:TBTC-USD"]
-# 公共-期权详细定价频道
-# channels = ["option/summary:TBTC-USD"]
-# 公共-K线频道
-# channels = ["option/candle60s:TBTC-USD-191213-7500-C"]
-# 公共-最新成交频道
-# channels = ["option/trade:TBTC-USD-191213-7500-C"]
-# 公共-Ticker频道
-# channels = ["option/ticker:TBTC-USD-191213-7500-C"]
-# 公共-5档深度频道
-# channels = ["option/depth5:TBTC-USD-191213-7500-C"]
-# 公共-400档深度频道
-# channels = ["option/depth:TBTC-USD-191213-7500-C"]
+    channel = [quest]
 
-loop = asyncio.get_event_loop()
+    loop = asyncio.get_event_loop()
+    # public data
+    loop.run_until_complete(subscribe_without_login(args, url, channel, filename))
 
-#公共数据 不需要登录（行情，K线，交易数据，资金费率，限价范围，深度数据，标记价格）
-loop.run_until_complete(subscribe_without_login(url, channels_0))
-loop.run_until_complete(subscribe_without_login(url, channels_1))
+    # personal data
+    # loop.run_until_complete(subscribe(url, api_key, passphrase, seceret_key, channels))
 
-#个人数据 需要登录（用户账户，用户交易，用户持仓）
-# loop.run_until_complete(subscribe(url, api_key, passphrase, seceret_key, channels))
-
-loop.close()
+    loop.close()
